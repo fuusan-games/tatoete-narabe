@@ -39,7 +39,8 @@
   function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function cleanName(n) { return String(n || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 8); }
   function cleanText(t, n) { return String(t || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, n); }
-  function genCode() { var c = ''; for (var i = 0; i < 4; i++) c += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]; return c; }
+  var PARTY = window.FuuParty && window.FuuParty.info;   // ひろばの「みんなの部屋」から来たとき
+  function genCode() { if (PARTY && PARTY.host) return PARTY.code; var c = ''; for (var i = 0; i < 4; i++) c += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]; return c; }
   function normCode(c) { return String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/O/g, '0').replace(/I/g, '1').slice(0, 4); }
   function inviteUrl(code) { var u = location.origin + location.pathname + '?room=' + code; if (Q.get('ice')) u += '&ice=' + encodeURIComponent(Q.get('ice')); return u; }
   function catOf(k) { return TH.CATS.filter(function (c) { return c.k === k; })[0] || { e: '✏️', label: 'オリジナル' }; }
@@ -111,7 +112,7 @@
     peer.on('error', function (e) {
       if (e.type === 'unavailable-id') {
         try { peer.destroy(); } catch (x) {}
-        if (!host.opened && R.phase === 'lobby' && !host.resuming) { R.code = genCode(); openHostPeer(); return; }
+        if (!host.opened && R.phase === 'lobby' && !host.resuming && !PARTY) { R.code = genCode(); openHostPeer(); return; }
         if (++host.tries > 25) { connecting(false); toast('部屋を再開できませんでした'); return; }
         connecting(true, '部屋を再開しています…', '少し時間がかかることがあります（' + host.tries + '）');
         setTimeout(openHostPeer, 3000);
@@ -484,7 +485,7 @@
   // ---- NPC「ふーさん🐻」の思考（ホスト内。自分の数字と公開情報だけを使う） ----
   function rnd(a, b) { return a + Math.random() * (b - a); }
   function npcTick() {
-    if (!host || !host.opened && !host.resuming) return;
+    if (!host || !host.opened && !host.resuming && !PARTY) return;
     var R = host.room, G = R.G; if (!G) return;
     var now = Date.now(), k = TURBO ? 0.12 : 1, level = R.opts.npc;
     var npcs = R.seats.filter(function (s) { return s.kind === 'npc'; });
@@ -632,10 +633,11 @@
     connecting(true, '部屋 ' + code + ' に接続中…', 'しばらくお待ちください', function () { leaveClient(false); });
     var peer = new Peer(PEER_OPTS);
     client.peer = peer;
+    if (PARTY) client.watch = setInterval(function () { if (!client) return; if (client.everJoined) { clearInterval(client.watch); return; } if (client.peer.open && !(client.conn && client.conn.open)) clientConnect(); }, FuuParty.watchMs);   // みんなの部屋：ホストより先に着いたときの取りこぼし対策
     peer.on('open', clientConnect);
     peer.on('disconnected', function () { if (!peer.destroyed) setTimeout(function () { try { peer.reconnect(); } catch (e) {} }, 2000); });
     peer.on('error', function (e) {
-      if (e.type === 'peer-unavailable') {
+      if (e.type === 'peer-unavailable') { if (PARTY && !client.everJoined && (client.ptries = (client.ptries || 0) + 1) < FuuParty.retries) { connecting(true, 'ホストを待っています…', '部屋 ' + client.code); setTimeout(clientConnect, FuuParty.retryMs); return; }
         if (!client.everJoined) { connecting(false); toast('部屋が見つかりません。コードを確認してください。'); leaveClient(false); }
         else clientLost();
       } else if (['network', 'server-error', 'socket-error', 'socket-closed'].indexOf(e.type) >= 0) {
@@ -666,7 +668,7 @@
     if (!m || typeof m !== 'object') return;
     client.lastMsg = Date.now();
     if (m.t === 'welcome') { client.everJoined = true; connecting(false); banner(''); sstore(SS_CLIENT, { code: client.code, name: client.name }); }
-    else if (m.t === 'state') { received.push(m); if (received.length > 4000) received.shift(); render(m); }
+    else if (m.t === 'fuu-goto') { if (PARTY) { try { sstore(SS_CLIENT, null); } catch (e) {} FuuParty.handle(m); } } else if (m.t === 'state') { received.push(m); if (received.length > 4000) received.shift(); render(m); }
     else if (m.t === 'reject') { connecting(false); leaveClient(false); confirmBox('お知らせ', m.msg, 'OK', null, true); }
     else if (m.t === 'kicked') { sstore(SS_CLIENT, null); leaveClient(false); confirmBox('お知らせ', 'ホストによって部屋から外されました。', 'OK', null, true); }
     else if (m.t === 'closed') { sstore(SS_CLIENT, null); leaveClient(false); confirmBox('お知らせ', 'ホストが部屋を閉じました。', 'OK', null, true); }
@@ -1234,4 +1236,18 @@
     npcTick: function () { npcTick(); }
   };
   renderTitle();
+
+  // ---- ひろばの「みんなの部屋」：同じメンバーで自動入室＋ホストは「つぎのゲーム」 ----
+  if (PARTY) {
+    FuuParty.init({ game: 'tatoete-narabe',
+      isHost: function () { return !!host && !host.room.solo; },
+      inGame: function () { var R = host && host.room; return !!R && ['lobby', 'end', 'over', 'result'].indexOf(R.phase) < 0 && !(R.G && (R.G.over || R.G.phase === 'end' || R.G.phase === 'over')); },
+      broadcast: function (m) { if (host) Object.keys(host.conns).forEach(function (cid) { try { host.conns[cid].send(m); } catch (e) {} }); } });
+    FuuParty.status = function () { return host ? { host: 1, n: Object.keys(host.conns).filter(function (k) { return host.conns[k].open; }).length } : { host: 0, joined: !!(client && client.everJoined) }; };
+    $('nameIn').value = cleanName(PARTY.name) || 'ななし';
+    setTimeout(function () {
+      if (PARTY.host) { store(LS_HOST, null); startHost(cleanName(PARTY.name) || 'ホスト', null); }
+      else startClient(PARTY.code, cleanName(PARTY.name) || 'ななし');
+    }, 50);
+  }
 })();
