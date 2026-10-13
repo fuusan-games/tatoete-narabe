@@ -1,6 +1,6 @@
 # たとえてナラベ！ 🐻 ― ふーさんと数字をことばで伝えあう協力ゲーム
 
-**▶ 遊ぶ：https://ryowatanabe1161-svg.github.io/tatoete-narabe/**　（リポジトリ：https://github.com/ryowatanabe1161-svg/tatoete-narabe）
+**▶ 遊ぶ：https://fuusan-games.github.io/tatoete-narabe/**　（リポジトリ：https://github.com/fuusan-games/tatoete-narabe）
 
 スマホのブラウザで遊べる、オンライン協力パーティーゲームです（2〜10人）。
 1〜100の数字が配られます。数字そのものは言わずに、お題にそって「たとえ」て伝えあい、全員の数字を小さい順に並べられたらクリア。
